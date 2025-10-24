@@ -39,34 +39,59 @@ local function debugPrint(...)
     end
 end
 
--- Utility: Clean weapon name (remove _K_2020, _G_2018, etc.)
-local function cleanWeaponName(name)
-    if not name then return "" end
-    name = tostring(name)
+-- Utility: Extract weapon info (name, type, year)
+local function parseWeaponName(rawName)
+    if not rawName then return nil end
+    local name = tostring(rawName)
     
-    -- Remove patterns like _K_2020, _G_2018, _K_2019, etc.
-    name = name:gsub("_[KG]_%d%d%d%d", "")
+    local weaponType = "Unknown"
+    local year = nil
+    local cleanName = name
     
-    -- Remove _K_Year, _G_Year patterns (just in case)
-    name = name:gsub("_[KG]_Year", "")
+    -- Check for weapon type (_K = Knife, _G = Gun)
+    if name:match("_K_") or name:match("_K$") then
+        weaponType = "Knife"
+    elseif name:match("_G_") or name:match("_G$") then
+        weaponType = "Gun"
+    end
     
-    -- Clean up underscores and spaces
-    name = name:gsub("_", " ")
-    name = name:gsub("%s+", " ")
-    name = name:match("^%s*(.-)%s*$") -- trim
+    -- Extract year if present (e.g., _K_2020, _G_2018)
+    local yearMatch = name:match("_[KG]_(%d%d%d%d)")
+    if yearMatch then
+        year = yearMatch
+    end
     
-    return name
+    -- Clean the name (remove _K, _G, years, etc.)
+    cleanName = name:gsub("_[KG]_%d%d%d%d", "")  -- Remove _K_2020, _G_2018
+    cleanName = cleanName:gsub("_[KG]_Year", "") -- Remove _K_Year, _G_Year
+    cleanName = cleanName:gsub("_[KG]$", "")     -- Remove trailing _K or _G
+    cleanName = cleanName:gsub("_", " ")         -- Replace underscores with spaces
+    cleanName = cleanName:gsub("%s+", " ")       -- Clean multiple spaces
+    cleanName = cleanName:match("^%s*(.-)%s*$")  -- Trim
+    
+    return {
+        original = name,
+        clean = cleanName,
+        type = weaponType,
+        year = year
+    }
 end
 
 -- Utility: Compare weapon names (case-insensitive, cleaned)
 local function weaponMatches(weapon1, weapon2)
-    local clean1 = cleanWeaponName(weapon1):lower():gsub("%s+", "")
-    local clean2 = cleanWeaponName(weapon2):lower():gsub("%s+", "")
+    local parsed1 = parseWeaponName(weapon1)
+    local parsed2 = parseWeaponName(weapon2)
+    
+    if not parsed1 or not parsed2 then return false end
+    
+    local clean1 = parsed1.clean:lower():gsub("%s+", "")
+    local clean2 = parsed2.clean:lower():gsub("%s+", "")
+    
     return clean1 == clean2
 end
 
 -- GUI: Create notification
-local function createNotification(playerName, weaponName)
+local function createNotification(playerName, weaponInfo)
     local player = Players.LocalPlayer
     local playerGui = player:WaitForChild("PlayerGui")
     
@@ -81,11 +106,11 @@ local function createNotification(playerName, weaponName)
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     screenGui.Parent = playerGui
     
-    -- Create frame
+    -- Create frame (taller to fit more info)
     local frame = Instance.new("Frame")
     frame.Name = "NotificationFrame"
-    frame.Size = UDim2.new(0, 400, 0, 200)
-    frame.Position = UDim2.new(0.5, -200, 0.5, -100)
+    frame.Size = UDim2.new(0, 420, 0, 240)
+    frame.Position = UDim2.new(0.5, -210, 0.5, -120)
     frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
     frame.BorderSizePixel = 0
     frame.Parent = screenGui
@@ -95,9 +120,15 @@ local function createNotification(playerName, weaponName)
     corner.CornerRadius = UDim.new(0, 12)
     corner.Parent = frame
     
-    -- Shadow/Stroke
+    -- Shadow/Stroke (color based on weapon type)
     local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(0, 255, 0)
+    if weaponInfo.type == "Knife" then
+        stroke.Color = Color3.fromRGB(255, 100, 100) -- Red for knives
+    elseif weaponInfo.type == "Gun" then
+        stroke.Color = Color3.fromRGB(100, 150, 255) -- Blue for guns
+    else
+        stroke.Color = Color3.fromRGB(0, 255, 0) -- Green for unknown
+    end
     stroke.Thickness = 3
     stroke.Parent = frame
     
@@ -108,7 +139,7 @@ local function createNotification(playerName, weaponName)
     title.Position = UDim2.new(0, 10, 0, 10)
     title.BackgroundTransparency = 1
     title.Text = "🎯 WEAPON FOUND!"
-    title.TextColor3 = Color3.fromRGB(0, 255, 0)
+    title.TextColor3 = stroke.Color
     title.TextSize = 24
     title.Font = Enum.Font.GothamBold
     title.Parent = frame
@@ -117,34 +148,64 @@ local function createNotification(playerName, weaponName)
     local playerLabel = Instance.new("TextLabel")
     playerLabel.Name = "PlayerLabel"
     playerLabel.Size = UDim2.new(1, -20, 0, 30)
-    playerLabel.Position = UDim2.new(0, 10, 0, 60)
+    playerLabel.Position = UDim2.new(0, 10, 0, 55)
     playerLabel.BackgroundTransparency = 1
-    playerLabel.Text = "Player: " .. playerName
+    playerLabel.Text = "👤 Player: " .. playerName
     playerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    playerLabel.TextSize = 18
+    playerLabel.TextSize = 16
     playerLabel.Font = Enum.Font.Gotham
     playerLabel.TextXAlignment = Enum.TextXAlignment.Left
     playerLabel.Parent = frame
     
-    -- Weapon info
+    -- Weapon name
     local weaponLabel = Instance.new("TextLabel")
     weaponLabel.Name = "WeaponLabel"
     weaponLabel.Size = UDim2.new(1, -20, 0, 30)
-    weaponLabel.Position = UDim2.new(0, 10, 0, 95)
+    weaponLabel.Position = UDim2.new(0, 10, 0, 90)
     weaponLabel.BackgroundTransparency = 1
-    weaponLabel.Text = "Weapon: " .. weaponName
-    weaponLabel.TextColor3 = Color3.fromRGB(255, 255, 0)
+    weaponLabel.Text = "🔪 Weapon: " .. weaponInfo.clean
+    weaponLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
     weaponLabel.TextSize = 18
     weaponLabel.Font = Enum.Font.GothamBold
     weaponLabel.TextXAlignment = Enum.TextXAlignment.Left
     weaponLabel.Parent = frame
     
+    -- Weapon type
+    local typeLabel = Instance.new("TextLabel")
+    typeLabel.Name = "TypeLabel"
+    typeLabel.Size = UDim2.new(1, -20, 0, 25)
+    typeLabel.Position = UDim2.new(0, 10, 0, 125)
+    typeLabel.BackgroundTransparency = 1
+    
+    local typeIcon = weaponInfo.type == "Knife" and "🔪" or (weaponInfo.type == "Gun" and "🔫" or "❓")
+    typeLabel.Text = typeIcon .. " Type: " .. weaponInfo.type
+    typeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+    typeLabel.TextSize = 15
+    typeLabel.Font = Enum.Font.Gotham
+    typeLabel.TextXAlignment = Enum.TextXAlignment.Left
+    typeLabel.Parent = frame
+    
+    -- Year info (if available)
+    if weaponInfo.year then
+        local yearLabel = Instance.new("TextLabel")
+        yearLabel.Name = "YearLabel"
+        yearLabel.Size = UDim2.new(1, -20, 0, 25)
+        yearLabel.Position = UDim2.new(0, 10, 0, 150)
+        yearLabel.BackgroundTransparency = 1
+        yearLabel.Text = "📅 Year: " .. weaponInfo.year
+        yearLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+        yearLabel.TextSize = 15
+        yearLabel.Font = Enum.Font.Gotham
+        yearLabel.TextXAlignment = Enum.TextXAlignment.Left
+        yearLabel.Parent = frame
+    end
+    
     -- OK Button
     local button = Instance.new("TextButton")
     button.Name = "OKButton"
-    button.Size = UDim2.new(0, 120, 0, 40)
-    button.Position = UDim2.new(0.5, -60, 1, -50)
-    button.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+    button.Size = UDim2.new(0, 140, 0, 45)
+    button.Position = UDim2.new(0.5, -70, 1, -55)
+    button.BackgroundColor3 = stroke.Color
     button.Text = "OK"
     button.TextColor3 = Color3.fromRGB(255, 255, 255)
     button.TextSize = 20
@@ -161,12 +222,17 @@ local function createNotification(playerName, weaponName)
     end)
     
     -- Hover effect
+    local originalColor = stroke.Color
     button.MouseEnter:Connect(function()
-        button.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+        button.BackgroundColor3 = Color3.new(
+            math.min(originalColor.R + 0.2, 1),
+            math.min(originalColor.G + 0.2, 1),
+            math.min(originalColor.B + 0.2, 1)
+        )
     end)
     
     button.MouseLeave:Connect(function()
-        button.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+        button.BackgroundColor3 = originalColor
     end)
 end
 
@@ -259,21 +325,23 @@ local function scanPlayer(plr)
             if type(value) == "table" then
                 -- Check if this is a weapon entry
                 local weaponName = value.Name or value.ItemName or key
-                weaponName = cleanWeaponName(tostring(weaponName))
+                local weaponInfo = parseWeaponName(tostring(weaponName))
                 
-                debugPrint("Checking weapon:", weaponName, "against target:", config.TargetWeapon)
-                
-                if weaponMatches(weaponName, config.TargetWeapon) then
-                    return true, weaponName
+                if weaponInfo then
+                    debugPrint("Checking weapon:", weaponInfo.clean, "(" .. weaponInfo.type .. ")", "against target:", config.TargetWeapon)
+                    
+                    if weaponMatches(weaponInfo.original, config.TargetWeapon) then
+                        return true, weaponInfo
+                    end
                 end
                 
                 -- Recurse into nested tables
-                local found, name = scanWeapons(value)
-                if found then return true, name end
+                local found, info = scanWeapons(value)
+                if found then return true, info end
             elseif type(key) == "string" then
-                local weaponName = cleanWeaponName(key)
-                if weaponMatches(weaponName, config.TargetWeapon) then
-                    return true, weaponName
+                local weaponInfo = parseWeaponName(key)
+                if weaponInfo and weaponMatches(weaponInfo.original, config.TargetWeapon) then
+                    return true, weaponInfo
                 end
             end
         end
@@ -296,15 +364,22 @@ local function startScan()
         for _, plr in ipairs(players) do
             if not isSearching then break end
             
-            local found, weaponName = scanPlayer(plr)
+            local found, weaponInfo = scanPlayer(plr)
             
             if found then
                 isSearching = false
                 foundPlayer = plr.Name
-                foundWeapon = weaponName
+                foundWeapon = weaponInfo
                 
-                print(("[WeaponFinder] ✓ FOUND! Player: %s | Weapon: %s"):format(foundPlayer, foundWeapon))
-                createNotification(foundPlayer, foundWeapon)
+                local detailsText = string.format(
+                    "%s | Type: %s%s",
+                    weaponInfo.clean,
+                    weaponInfo.type,
+                    weaponInfo.year and (" | Year: " .. weaponInfo.year) or ""
+                )
+                
+                print(("[WeaponFinder] ✓ FOUND! Player: %s | %s"):format(foundPlayer, detailsText))
+                createNotification(foundPlayer, weaponInfo)
                 return
             end
             
