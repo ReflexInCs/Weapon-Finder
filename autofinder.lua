@@ -77,7 +77,7 @@ local function parseWeaponName(rawName)
     }
 end
 
--- Utility: Compare weapon names (case-insensitive, cleaned)
+-- Utility: Compare weapon names (exact match OR contains)
 local function weaponMatches(weapon1, weapon2)
     local parsed1 = parseWeaponName(weapon1)
     local parsed2 = parseWeaponName(weapon2)
@@ -87,7 +87,17 @@ local function weaponMatches(weapon1, weapon2)
     local clean1 = parsed1.clean:lower():gsub("%s+", "")
     local clean2 = parsed2.clean:lower():gsub("%s+", "")
     
-    return clean1 == clean2
+    -- Exact match
+    if clean1 == clean2 then
+        return true
+    end
+    
+    -- Partial match (contains)
+    if clean1:find(clean2, 1, true) or clean2:find(clean1, 1, true) then
+        return true
+    end
+    
+    return false
 end
 
 -- GUI: Create notification
@@ -355,6 +365,7 @@ end
 -- Main scan loop
 local function startScan()
     print("[WeaponFinder] Starting search for:", config.TargetWeapon)
+    print("[WeaponFinder] Search mode: Exact match OR contains")
     print("[WeaponFinder] Auto server hop:", config.AutoServerHop)
     
     while isSearching do
