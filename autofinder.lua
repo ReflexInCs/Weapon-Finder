@@ -39,20 +39,18 @@ local function debugPrint(...)
     end
 end
 
--- Utility: Clean weapon name (remove years, _K_Year, _G_Year, etc.)
+-- Utility: Clean weapon name (remove _K_2020, _G_2018, etc.)
 local function cleanWeaponName(name)
     if not name then return "" end
     name = tostring(name)
     
-    -- Remove year patterns like 2018, 2019, 2020, etc.
-    name = name:gsub("%d%d%d%d", "")
+    -- Remove patterns like _K_2020, _G_2018, _K_2019, etc.
+    name = name:gsub("_[KG]_%d%d%d%d", "")
     
-    -- Remove _K_Year, _G_Year patterns
+    -- Remove _K_Year, _G_Year patterns (just in case)
     name = name:gsub("_[KG]_Year", "")
-    name = name:gsub("_K_Year", "")
-    name = name:gsub("_G_Year", "")
     
-    -- Remove underscores and extra spaces
+    -- Clean up underscores and spaces
     name = name:gsub("_", " ")
     name = name:gsub("%s+", " ")
     name = name:match("^%s*(.-)%s*$") -- trim
