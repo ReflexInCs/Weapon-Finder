@@ -39,14 +39,24 @@ local function debugPrint(...)
     end
 end
 
--- Utility: Clean weapon name (remove _K_Year, _G_Year, etc.)
+-- Utility: Clean weapon name (remove years, _K_Year, _G_Year, etc.)
 local function cleanWeaponName(name)
     if not name then return "" end
     name = tostring(name)
-    -- Remove _K_Year, _G_Year and any similar patterns
+    
+    -- Remove year patterns like 2018, 2019, 2020, etc.
+    name = name:gsub("%d%d%d%d", "")
+    
+    -- Remove _K_Year, _G_Year patterns
     name = name:gsub("_[KG]_Year", "")
     name = name:gsub("_K_Year", "")
     name = name:gsub("_G_Year", "")
+    
+    -- Remove underscores and extra spaces
+    name = name:gsub("_", " ")
+    name = name:gsub("%s+", " ")
+    name = name:match("^%s*(.-)%s*$") -- trim
+    
     return name
 end
 
@@ -162,33 +172,67 @@ local function createNotification(playerName, weaponName)
     end)
 end
 
--- Server Hop Function
+-- Server Hop Function (Fixed)
 local function serverHop()
     if not config.AutoServerHop then return end
     
-    print("[WeaponFinder] Server hopping...")
+    print("[WeaponFinder] Initiating server hop...")
     
-    local success, result = pcall(function()
-        local servers = HttpService:JSONDecode(game:HttpGet(
-            "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
-        ))
+    local success, errorMsg = pcall(function()
+        -- Method 1: Try public servers API
+        local serversUrl = string.format(
+            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+            game.PlaceId
+        )
+        
+        local response = game:HttpGetAsync(serversUrl)
+        local servers = HttpService:JSONDecode(response)
         
         if servers and servers.data then
             local currentJobId = game.JobId
+            local validServers = {}
             
+            -- Collect valid servers
             for _, server in ipairs(servers.data) do
-                if server.id ~= currentJobId and server.playing < server.maxPlayers then
-                    TeleportService:TeleportToPlaceInstance(game.PlaceId, server.id, Players.LocalPlayer)
-                    return
+                if server.id ~= currentJobId and server.playing < server.maxPlayers - 1 then
+                    table.insert(validServers, server)
                 end
+            end
+            
+            if #validServers > 0 then
+                -- Pick a random server
+                local randomServer = validServers[math.random(1, #validServers)]
+                print("[WeaponFinder] Found server with " .. randomServer.playing .. "/" .. randomServer.maxPlayers .. " players")
+                print("[WeaponFinder] Teleporting...")
+                
+                TeleportService:TeleportToPlaceInstance(
+                    game.PlaceId,
+                    randomServer.id,
+                    Players.LocalPlayer
+                )
+                return true
             end
         end
     end)
     
     if not success then
-        warn("[WeaponFinder] Server hop failed:", result)
-        wait(5)
-        TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+        warn("[WeaponFinder] Server hop method 1 failed:", errorMsg)
+        
+        -- Method 2: Simple rejoin
+        print("[WeaponFinder] Attempting simple rejoin...")
+        local rejoinSuccess = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, Players.LocalPlayer)
+            wait(1)
+            -- Force rejoin by teleporting to place
+            TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+        end)
+        
+        if not rejoinSuccess then
+            warn("[WeaponFinder] All server hop methods failed. Retrying in 10 seconds...")
+            wait(10)
+            -- Final fallback
+            game:GetService("TeleportService"):Teleport(game.PlaceId)
+        end
     end
 end
 
@@ -270,12 +314,16 @@ local function startScan()
         end
         
         if isSearching then
-            print("[WeaponFinder] Weapon not found in this server. Waiting before next action...")
-            wait(config.ScanInterval)
+            print("[WeaponFinder] Weapon not found in this server.")
             
-            if isSearching and config.AutoServerHop then
+            if config.AutoServerHop then
+                print("[WeaponFinder] Server hopping in 3 seconds...")
+                wait(3)
                 serverHop()
                 return -- Stop after initiating hop
+            else
+                print("[WeaponFinder] Waiting " .. config.ScanInterval .. " seconds before next scan...")
+                wait(config.ScanInterval)
             end
         end
     end
