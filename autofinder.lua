@@ -16,6 +16,7 @@
 getgenv().WeaponFinderConfig = getgenv().WeaponFinderConfig or {}
 local config = {
     TargetWeapon = getgenv().WeaponFinderConfig.TargetWeapon or "Nik's Scythe",
+    Category = getgenv().WeaponFinderConfig.Category or nil, -- e.g., "Godly", "Ancient", "Legendary", "Rare", "Uncommon", "Common"
     AutoServerHop = getgenv().WeaponFinderConfig.AutoServerHop ~= false,
     ScanInterval = getgenv().WeaponFinderConfig.ScanInterval or 5,
     Debug = getgenv().WeaponFinderConfig.Debug or false
@@ -365,6 +366,7 @@ end
 -- Main scan loop
 local function startScan()
     print("[WeaponFinder] Starting search for:", config.TargetWeapon)
+    print("[WeaponFinder] Search mode: Exact match OR contains")
     print("[WeaponFinder] Auto server hop:", config.AutoServerHop)
     
     while isSearching do
