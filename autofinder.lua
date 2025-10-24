@@ -16,6 +16,7 @@
 getgenv().WeaponFinderConfig = getgenv().WeaponFinderConfig or {}
 local config = {
     TargetWeapon = getgenv().WeaponFinderConfig.TargetWeapon or "Nik's Scythe",
+    Category = getgenv().WeaponFinderConfig.Category or nil, -- e.g., "Godly", "Ancient", "Legendary", "Rare", "Uncommon", "Common"
     AutoServerHop = getgenv().WeaponFinderConfig.AutoServerHop ~= false,
     ScanInterval = getgenv().WeaponFinderConfig.ScanInterval or 5,
     Debug = getgenv().WeaponFinderConfig.Debug or false
@@ -39,14 +40,20 @@ local function debugPrint(...)
     end
 end
 
--- Utility: Extract weapon info (name, type, year)
-local function parseWeaponName(rawName)
+-- Utility: Extract weapon info (name, type, year, category)
+local function parseWeaponName(rawName, categoryPath)
     if not rawName then return nil end
     local name = tostring(rawName)
     
     local weaponType = "Unknown"
     local year = nil
     local cleanName = name
+    local category = nil
+    
+    -- Extract category from path if provided (e.g., "Godly", "Ancient")
+    if categoryPath then
+        category = categoryPath
+    end
     
     -- Check for weapon type (_K = Knife, _G = Gun)
     if name:match("_K_") or name:match("_K$") then
@@ -73,28 +80,41 @@ local function parseWeaponName(rawName)
         original = name,
         clean = cleanName,
         type = weaponType,
-        year = year
+        year = year,
+        category = category
     }
 end
 
--- Utility: Compare weapon names (exact match OR contains)
+-- Utility: Compare weapon names (must contain full word)
 local function weaponMatches(weapon1, weapon2)
     local parsed1 = parseWeaponName(weapon1)
     local parsed2 = parseWeaponName(weapon2)
     
     if not parsed1 or not parsed2 then return false end
     
-    local clean1 = parsed1.clean:lower():gsub("%s+", "")
-    local clean2 = parsed2.clean:lower():gsub("%s+", "")
+    local clean1 = parsed1.clean:lower()
+    local clean2 = parsed2.clean:lower()
     
-    -- Exact match
-    if clean1 == clean2 then
+    -- Exact match (ignoring spaces)
+    if clean1:gsub("%s+", "") == clean2:gsub("%s+", "") then
         return true
     end
     
-    -- Partial match (contains)
-    if clean1:find(clean2, 1, true) or clean2:find(clean1, 1, true) then
-        return true
+    -- Word boundary matching - the search term must be a complete word
+    -- Pattern explanation: %f[%w] = word boundary at start, %f[%W] = word boundary at end
+    local searchTerm = clean2:gsub("%s+", "") -- Remove spaces from search term
+    local targetWords = clean1:gsub("%s+", "") -- Remove spaces from target
+    
+    -- Check if search term is contained as a complete sequence
+    if targetWords:find(searchTerm, 1, true) then
+        -- Verify it's not a partial match by checking boundaries
+        local pattern = searchTerm:gsub("([^%w])", "%%%1") -- Escape special chars
+        if clean1:lower():match("%f[%w]" .. pattern .. "%f[%W]") or 
+           clean1:lower():match("^" .. pattern .. "%f[%W]") or
+           clean1:lower():match("%f[%w]" .. pattern .. "$") or
+           clean1:lower():match("^" .. pattern .. "$") then
+            return true
+        end
     end
     
     return false
@@ -196,6 +216,7 @@ local function createNotification(playerName, weaponInfo)
     typeLabel.Parent = frame
     
     -- Year info (if available)
+    local yOffset = weaponInfo.year and 150 or 125
     if weaponInfo.year then
         local yearLabel = Instance.new("TextLabel")
         yearLabel.Name = "YearLabel"
@@ -208,6 +229,33 @@ local function createNotification(playerName, weaponInfo)
         yearLabel.Font = Enum.Font.Gotham
         yearLabel.TextXAlignment = Enum.TextXAlignment.Left
         yearLabel.Parent = frame
+    end
+    
+    -- Category info (if available)
+    if weaponInfo.category then
+        local categoryLabel = Instance.new("TextLabel")
+        categoryLabel.Name = "CategoryLabel"
+        categoryLabel.Size = UDim2.new(1, -20, 0, 25)
+        categoryLabel.Position = UDim2.new(0, 10, 0, yOffset)
+        categoryLabel.BackgroundTransparency = 1
+        
+        local categoryIcon = "⭐"
+        if weaponInfo.category:lower() == "godly" then categoryIcon = "✨"
+        elseif weaponInfo.category:lower() == "ancient" then categoryIcon = "🏺"
+        elseif weaponInfo.category:lower() == "legendary" then categoryIcon = "👑"
+        elseif weaponInfo.category:lower() == "rare" then categoryIcon = "💎"
+        end
+        
+        categoryLabel.Text = categoryIcon .. " Rarity: " .. weaponInfo.category
+        categoryLabel.TextColor3 = Color3.fromRGB(255, 215, 0) -- Gold color
+        categoryLabel.TextSize = 15
+        categoryLabel.Font = Enum.Font.GothamBold
+        categoryLabel.TextXAlignment = Enum.TextXAlignment.Left
+        categoryLabel.Parent = frame
+        
+        -- Adjust frame height if category exists
+        frame.Size = UDim2.new(0, 420, 0, 265)
+        frame.Position = UDim2.new(0.5, -210, 0.5, -132.5)
     end
     
     -- OK Button
@@ -328,30 +376,67 @@ local function scanPlayer(plr)
     if not weaponsData then return false end
     
     -- Recursive scan function
-    local function scanWeapons(data)
+    local function scanWeapons(data, currentCategory)
         if type(data) ~= "table" then return false end
         
         for key, value in pairs(data) do
             if type(value) == "table" then
-                -- Check if this is a weapon entry
-                local weaponName = value.Name or value.ItemName or key
-                local weaponInfo = parseWeaponName(tostring(weaponName))
+                -- Check if this key is a category name (Godly, Ancient, etc.)
+                local potentialCategory = tostring(key)
+                local knownCategories = {"Godly", "Ancient", "Legendary", "Rare", "Uncommon", "Common", "Unique", "Vintage"}
+                local isCategory = false
                 
-                if weaponInfo then
-                    debugPrint("Checking weapon:", weaponInfo.clean, "(" .. weaponInfo.type .. ")", "against target:", config.TargetWeapon)
+                for _, cat in ipairs(knownCategories) do
+                    if potentialCategory:lower() == cat:lower() then
+                        isCategory = true
+                        currentCategory = cat
+                        break
+                    end
+                end
+                
+                -- Check if this is a weapon entry
+                local weaponName = value.Name or value.ItemName or (not isCategory and key or nil)
+                
+                if weaponName then
+                    local weaponInfo = parseWeaponName(tostring(weaponName), currentCategory)
                     
-                    if weaponMatches(weaponInfo.original, config.TargetWeapon) then
-                        return true, weaponInfo
+                    if weaponInfo then
+                        debugPrint("Checking weapon:", weaponInfo.clean, "(" .. weaponInfo.type .. ")", 
+                                  weaponInfo.category and ("Rarity: " .. weaponInfo.category) or "", 
+                                  "against target:", config.TargetWeapon)
+                        
+                        -- Check if weapon name matches
+                        local nameMatch = weaponMatches(weaponInfo.original, config.TargetWeapon)
+                        
+                        -- Check if category matches (if specified)
+                        local categoryMatch = true
+                        if config.Category then
+                            categoryMatch = weaponInfo.category and 
+                                          weaponInfo.category:lower() == config.Category:lower()
+                        end
+                        
+                        if nameMatch and categoryMatch then
+                            return true, weaponInfo
+                        end
                     end
                 end
                 
                 -- Recurse into nested tables
-                local found, info = scanWeapons(value)
+                local found, info = scanWeapons(value, currentCategory)
                 if found then return true, info end
             elseif type(key) == "string" then
-                local weaponInfo = parseWeaponName(key)
-                if weaponInfo and weaponMatches(weaponInfo.original, config.TargetWeapon) then
-                    return true, weaponInfo
+                local weaponInfo = parseWeaponName(key, currentCategory)
+                if weaponInfo then
+                    local nameMatch = weaponMatches(weaponInfo.original, config.TargetWeapon)
+                    local categoryMatch = true
+                    if config.Category then
+                        categoryMatch = weaponInfo.category and 
+                                      weaponInfo.category:lower() == config.Category:lower()
+                    end
+                    
+                    if nameMatch and categoryMatch then
+                        return true, weaponInfo
+                    end
                 end
             end
         end
@@ -359,13 +444,16 @@ local function scanPlayer(plr)
         return false
     end
     
-    return scanWeapons(weaponsData)
+    return scanWeapons(weaponsData, nil)
 end
 
 -- Main scan loop
 local function startScan()
     print("[WeaponFinder] Starting search for:", config.TargetWeapon)
-    print("[WeaponFinder] Search mode: Exact match OR contains")
+    if config.Category then
+        print("[WeaponFinder] Category filter:", config.Category)
+    end
+    print("[WeaponFinder] Search mode: Full word matching")
     print("[WeaponFinder] Auto server hop:", config.AutoServerHop)
     
     while isSearching do
@@ -383,10 +471,11 @@ local function startScan()
                 foundWeapon = weaponInfo
                 
                 local detailsText = string.format(
-                    "%s | Type: %s%s",
+                    "%s | Type: %s%s%s",
                     weaponInfo.clean,
                     weaponInfo.type,
-                    weaponInfo.year and (" | Year: " .. weaponInfo.year) or ""
+                    weaponInfo.year and (" | Year: " .. weaponInfo.year) or "",
+                    weaponInfo.category and (" | Rarity: " .. weaponInfo.category) or ""
                 )
                 
                 print(("[WeaponFinder] ✓ FOUND! Player: %s | %s"):format(foundPlayer, detailsText))
