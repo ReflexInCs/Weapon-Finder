@@ -1,12 +1,12 @@
 --[[
-    Weapon Finder - Murder Mystery 2 Inventory Scanner
+    Weapon Finder - Murder Mystery 2 Inventory Scanner (Database Edition)
     
     Usage:
     getgenv().WeaponFinderConfig = {
-        TargetWeapon = "Nik's Scythe",  -- Weapon to search for
-        AutoServerHop = true,            -- Enable auto server hopping
-        ScanInterval = 5,                -- Seconds between scans
-        Debug = false                    -- Show debug messages
+        TargetWeaponID = "NikKnife",  -- Exact weapon ID to search for
+        AutoServerHop = true,          -- Enable auto server hopping
+        ScanInterval = 5,              -- Seconds between scans
+        Debug = false                  -- Show debug messages
     }
     
     Then execute this script!
@@ -15,11 +15,14 @@
 -- Configuration with defaults
 getgenv().WeaponFinderConfig = getgenv().WeaponFinderConfig or {}
 local config = {
-    TargetWeapon = getgenv().WeaponFinderConfig.TargetWeapon or "Nik's Scythe",
+    TargetWeaponID = getgenv().WeaponFinderConfig.TargetWeaponID or "NikKnife",
     AutoServerHop = getgenv().WeaponFinderConfig.AutoServerHop ~= false,
     ScanInterval = getgenv().WeaponFinderConfig.ScanInterval or 5,
     Debug = getgenv().WeaponFinderConfig.Debug or false
 }
+
+-- Database URL (hardcoded)
+local DATABASE_URL = "https://raw.githubusercontent.com/ReflexInCs/weapon-db/main/MM2_Complete_Weapons_Database.csv"
 
 -- Services
 local Players = game:GetService("Players")
@@ -31,6 +34,7 @@ local HttpService = game:GetService("HttpService")
 local isSearching = true
 local foundPlayer = nil
 local foundWeapon = nil
+local weaponDatabase = {}
 
 -- Utility: Debug print
 local function debugPrint(...)
@@ -39,68 +43,114 @@ local function debugPrint(...)
     end
 end
 
--- Utility: Extract weapon info (name, type, year)
-local function parseWeaponName(rawName)
-    if not rawName then return nil end
-    local name = tostring(rawName)
+-- Parse CSV line (handles quoted values)
+local function parseCSVLine(line)
+    local fields = {}
+    local fieldStart = 1
+    local inQuotes = false
     
-    local weaponType = "Unknown"
-    local year = nil
-    local cleanName = name
-    
-    -- Check for weapon type (_K = Knife, _G = Gun)
-    if name:match("_K_") or name:match("_K$") then
-        weaponType = "Knife"
-    elseif name:match("_G_") or name:match("_G$") then
-        weaponType = "Gun"
+    for i = 1, #line do
+        local char = line:sub(i, i)
+        
+        if char == '"' then
+            inQuotes = not inQuotes
+        elseif char == ',' and not inQuotes then
+            local field = line:sub(fieldStart, i - 1)
+            field = field:gsub('^"', ''):gsub('"$', ''):gsub('""', '"')
+            table.insert(fields, field)
+            fieldStart = i + 1
+        end
     end
     
-    -- Extract year if present (e.g., _K_2020, _G_2018)
-    local yearMatch = name:match("_[KG]_(%d%d%d%d)")
-    if yearMatch then
-        year = yearMatch
+    -- Add last field
+    local field = line:sub(fieldStart)
+    field = field:gsub('^"', ''):gsub('"$', ''):gsub('""', '"')
+    table.insert(fields, field)
+    
+    return fields
+end
+
+-- Load weapon database from URL
+local function loadWeaponDatabase()
+    print("[WeaponFinder] Loading weapon database...")
+    
+    local success, result = pcall(function()
+        return game:HttpGet(DATABASE_URL)
+    end)
+    
+    if not success or not result then
+        warn("[WeaponFinder] Failed to load database from URL:", DATABASE_URL)
+        return false
     end
     
-    -- Clean the name (remove _K, _G, years, etc.)
-    cleanName = name:gsub("_[KG]_%d%d%d%d", "")  -- Remove _K_2020, _G_2018
-    cleanName = cleanName:gsub("_[KG]_Year", "") -- Remove _K_Year, _G_Year
-    cleanName = cleanName:gsub("_[KG]$", "")     -- Remove trailing _K or _G
-    cleanName = cleanName:gsub("_", " ")         -- Replace underscores with spaces
-    cleanName = cleanName:gsub("%s+", " ")       -- Clean multiple spaces
-    cleanName = cleanName:match("^%s*(.-)%s*$")  -- Trim
+    local lines = {}
+    for line in result:gmatch("[^\r\n]+") do
+        table.insert(lines, line)
+    end
     
+    if #lines < 2 then
+        warn("[WeaponFinder] Database is empty or invalid")
+        return false
+    end
+    
+    -- Parse header (Type,Name,ID,Rarity,Year,Event,AssetID)
+    local headers = parseCSVLine(lines[1])
+    debugPrint("CSV Headers:", table.concat(headers, " | "))
+    
+    -- Parse data rows
+    local count = 0
+    for i = 2, #lines do
+        local fields = parseCSVLine(lines[i])
+        if #fields >= 3 then
+            local weaponType = fields[1] or "Unknown"
+            local weaponName = fields[2] or "Unknown"
+            local weaponID = fields[3] or ""
+            local rarity = fields[4] or "Unknown"
+            local year = fields[5] or "N/A"
+            local event = fields[6] or "N/A"
+            local assetID = fields[7] or "N/A"
+            
+            if weaponID and weaponID ~= "" then
+                weaponDatabase[weaponID] = {
+                    id = weaponID,
+                    name = weaponName,
+                    type = weaponType,
+                    rarity = rarity,
+                    year = year,
+                    event = event,
+                    assetID = assetID
+                }
+                count = count + 1
+                
+                debugPrint("Loaded:", weaponID, "=>", weaponName, "(" .. rarity .. ")")
+            end
+        end
+    end
+    
+    print(("[WeaponFinder] ✓ Loaded %d weapons from database"):format(count))
+    return true
+end
+
+-- Get weapon info from database by exact ID
+local function getWeaponInfo(weaponID)
+    -- Try exact match first
+    if weaponDatabase[weaponID] then
+        return weaponDatabase[weaponID]
+    end
+    
+    -- Return basic info if not in database
     return {
-        original = name,
-        clean = cleanName,
-        type = weaponType,
-        year = year
+        id = weaponID,
+        name = weaponID,
+        type = "Unknown",
+        rarity = "Unknown",
+        year = "N/A",
+        event = "N/A",
+        assetID = "N/A"
     }
 end
 
--- Utility: Compare weapon names (exact match OR contains)
-local function weaponMatches(weapon1, weapon2)
-    local parsed1 = parseWeaponName(weapon1)
-    local parsed2 = parseWeaponName(weapon2)
-    
-    if not parsed1 or not parsed2 then return false end
-    
-    local clean1 = parsed1.clean:lower():gsub("%s+", "")
-    local clean2 = parsed2.clean:lower():gsub("%s+", "")
-    
-    -- Exact match
-    if clean1 == clean2 then
-        return true
-    end
-    
-    -- Partial match (contains)
-    if clean1:find(clean2, 1, true) or clean2:find(clean1, 1, true) then
-        return true
-    end
-    
-    return false
-end
-
--- GUI: Create notification
+-- GUI: Create notification with database info
 local function createNotification(playerName, weaponInfo)
     local player = Players.LocalPlayer
     local playerGui = player:WaitForChild("PlayerGui")
@@ -116,114 +166,109 @@ local function createNotification(playerName, weaponInfo)
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     screenGui.Parent = playerGui
     
-    -- Create frame (taller to fit more info)
+    -- Create frame
     local frame = Instance.new("Frame")
     frame.Name = "NotificationFrame"
-    frame.Size = UDim2.new(0, 420, 0, 240)
-    frame.Position = UDim2.new(0.5, -210, 0.5, -120)
-    frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    frame.Size = UDim2.new(0, 480, 0, 340)
+    frame.Position = UDim2.new(0.5, -240, 0.5, -170)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
     frame.BorderSizePixel = 0
     frame.Parent = screenGui
     
     -- Corner
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 12)
+    corner.CornerRadius = UDim.new(0, 15)
     corner.Parent = frame
     
-    -- Shadow/Stroke (color based on weapon type)
-    local stroke = Instance.new("UIStroke")
-    if weaponInfo.type == "Knife" then
-        stroke.Color = Color3.fromRGB(255, 100, 100) -- Red for knives
-    elseif weaponInfo.type == "Gun" then
-        stroke.Color = Color3.fromRGB(100, 150, 255) -- Blue for guns
+    -- Stroke color based on rarity
+    local strokeColor
+    local rarityLower = weaponInfo.rarity:lower()
+    if rarityLower == "ancient" then
+        strokeColor = Color3.fromRGB(255, 50, 50) -- Red
+    elseif rarityLower == "godly" then
+        strokeColor = Color3.fromRGB(255, 215, 0) -- Gold
+    elseif rarityLower == "legendary" then
+        strokeColor = Color3.fromRGB(255, 100, 255) -- Purple
+    elseif rarityLower == "rare" then
+        strokeColor = Color3.fromRGB(100, 150, 255) -- Blue
+    elseif rarityLower == "uncommon" then
+        strokeColor = Color3.fromRGB(100, 255, 100) -- Green
+    elseif rarityLower == "unique" then
+        strokeColor = Color3.fromRGB(255, 150, 50) -- Orange
     else
-        stroke.Color = Color3.fromRGB(0, 255, 0) -- Green for unknown
+        strokeColor = Color3.fromRGB(200, 200, 200) -- Gray
     end
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = strokeColor
     stroke.Thickness = 3
     stroke.Parent = frame
     
     -- Title
     local title = Instance.new("TextLabel")
     title.Name = "Title"
-    title.Size = UDim2.new(1, -20, 0, 40)
+    title.Size = UDim2.new(1, -20, 0, 45)
     title.Position = UDim2.new(0, 10, 0, 10)
     title.BackgroundTransparency = 1
     title.Text = "🎯 WEAPON FOUND!"
-    title.TextColor3 = stroke.Color
-    title.TextSize = 24
+    title.TextColor3 = strokeColor
+    title.TextSize = 26
     title.Font = Enum.Font.GothamBold
     title.Parent = frame
     
-    -- Player info
-    local playerLabel = Instance.new("TextLabel")
-    playerLabel.Name = "PlayerLabel"
-    playerLabel.Size = UDim2.new(1, -20, 0, 30)
-    playerLabel.Position = UDim2.new(0, 10, 0, 55)
-    playerLabel.BackgroundTransparency = 1
-    playerLabel.Text = "👤 Player: " .. playerName
-    playerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    playerLabel.TextSize = 16
-    playerLabel.Font = Enum.Font.Gotham
-    playerLabel.TextXAlignment = Enum.TextXAlignment.Left
-    playerLabel.Parent = frame
+    -- Create scrolling frame for info
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Name = "InfoScroll"
+    scrollFrame.Size = UDim2.new(1, -20, 1, -120)
+    scrollFrame.Position = UDim2.new(0, 10, 0, 60)
+    scrollFrame.BackgroundTransparency = 1
+    scrollFrame.BorderSizePixel = 0
+    scrollFrame.ScrollBarThickness = 6
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scrollFrame.Parent = frame
     
-    -- Weapon name
-    local weaponLabel = Instance.new("TextLabel")
-    weaponLabel.Name = "WeaponLabel"
-    weaponLabel.Size = UDim2.new(1, -20, 0, 30)
-    weaponLabel.Position = UDim2.new(0, 10, 0, 90)
-    weaponLabel.BackgroundTransparency = 1
-    weaponLabel.Text = "🔪 Weapon: " .. weaponInfo.clean
-    weaponLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
-    weaponLabel.TextSize = 18
-    weaponLabel.Font = Enum.Font.GothamBold
-    weaponLabel.TextXAlignment = Enum.TextXAlignment.Left
-    weaponLabel.Parent = frame
-    
-    -- Weapon type
-    local typeLabel = Instance.new("TextLabel")
-    typeLabel.Name = "TypeLabel"
-    typeLabel.Size = UDim2.new(1, -20, 0, 25)
-    typeLabel.Position = UDim2.new(0, 10, 0, 125)
-    typeLabel.BackgroundTransparency = 1
-    
-    local typeIcon = weaponInfo.type == "Knife" and "🔪" or (weaponInfo.type == "Gun" and "🔫" or "❓")
-    typeLabel.Text = typeIcon .. " Type: " .. weaponInfo.type
-    typeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-    typeLabel.TextSize = 15
-    typeLabel.Font = Enum.Font.Gotham
-    typeLabel.TextXAlignment = Enum.TextXAlignment.Left
-    typeLabel.Parent = frame
-    
-    -- Year info (if available)
-    if weaponInfo.year then
-        local yearLabel = Instance.new("TextLabel")
-        yearLabel.Name = "YearLabel"
-        yearLabel.Size = UDim2.new(1, -20, 0, 25)
-        yearLabel.Position = UDim2.new(0, 10, 0, 150)
-        yearLabel.BackgroundTransparency = 1
-        yearLabel.Text = "📅 Year: " .. weaponInfo.year
-        yearLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-        yearLabel.TextSize = 15
-        yearLabel.Font = Enum.Font.Gotham
-        yearLabel.TextXAlignment = Enum.TextXAlignment.Left
-        yearLabel.Parent = frame
+    -- Info labels
+    local yPos = 0
+    local function addLabel(icon, label, value, isHighlight)
+        local textLabel = Instance.new("TextLabel")
+        textLabel.Size = UDim2.new(1, -10, 0, 28)
+        textLabel.Position = UDim2.new(0, 5, 0, yPos)
+        textLabel.BackgroundTransparency = 1
+        textLabel.Text = icon .. " " .. label .. ": " .. value
+        textLabel.TextColor3 = isHighlight and Color3.fromRGB(255, 255, 100) or Color3.fromRGB(220, 220, 220)
+        textLabel.TextSize = isHighlight and 17 or 15
+        textLabel.Font = isHighlight and Enum.Font.GothamBold or Enum.Font.Gotham
+        textLabel.TextXAlignment = Enum.TextXAlignment.Left
+        textLabel.TextWrapped = true
+        textLabel.Parent = scrollFrame
+        yPos = yPos + 28
     end
+    
+    addLabel("👤", "Player", playerName, false)
+    addLabel("🔪", "Weapon Name", weaponInfo.name, true)
+    addLabel("🆔", "Weapon ID", weaponInfo.id, true)
+    addLabel("⚔️", "Type", weaponInfo.type, false)
+    addLabel("💎", "Rarity", weaponInfo.rarity, true)
+    addLabel("📅", "Year", weaponInfo.year, false)
+    addLabel("🎉", "Event", weaponInfo.event, false)
+    addLabel("🔢", "Asset ID", weaponInfo.assetID, false)
+    
+    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, yPos)
     
     -- OK Button
     local button = Instance.new("TextButton")
     button.Name = "OKButton"
-    button.Size = UDim2.new(0, 140, 0, 45)
-    button.Position = UDim2.new(0.5, -70, 1, -55)
-    button.BackgroundColor3 = stroke.Color
-    button.Text = "OK"
+    button.Size = UDim2.new(0, 160, 0, 50)
+    button.Position = UDim2.new(0.5, -80, 1, -60)
+    button.BackgroundColor3 = strokeColor
+    button.Text = "CLOSE"
     button.TextColor3 = Color3.fromRGB(255, 255, 255)
-    button.TextSize = 20
+    button.TextSize = 22
     button.Font = Enum.Font.GothamBold
     button.Parent = frame
     
     local buttonCorner = Instance.new("UICorner")
-    buttonCorner.CornerRadius = UDim.new(0, 8)
+    buttonCorner.CornerRadius = UDim.new(0, 10)
     buttonCorner.Parent = button
     
     -- Button click
@@ -232,85 +277,100 @@ local function createNotification(playerName, weaponInfo)
     end)
     
     -- Hover effect
-    local originalColor = stroke.Color
     button.MouseEnter:Connect(function()
         button.BackgroundColor3 = Color3.new(
-            math.min(originalColor.R + 0.2, 1),
-            math.min(originalColor.G + 0.2, 1),
-            math.min(originalColor.B + 0.2, 1)
+            math.min(strokeColor.R + 0.2, 1),
+            math.min(strokeColor.G + 0.2, 1),
+            math.min(strokeColor.B + 0.2, 1)
         )
     end)
     
     button.MouseLeave:Connect(function()
-        button.BackgroundColor3 = originalColor
+        button.BackgroundColor3 = strokeColor
     end)
 end
 
--- Server Hop Function (Fixed)
+-- Server Hop Function with retry logic
 local function serverHop()
     if not config.AutoServerHop then return end
     
-    print("[WeaponFinder] Initiating server hop...")
+    local maxRetries = 5
+    local retryCount = 0
     
-    local success, errorMsg = pcall(function()
+    while retryCount < maxRetries do
+        retryCount = retryCount + 1
+        print(("[WeaponFinder] Server hop attempt %d/%d..."):format(retryCount, maxRetries))
+        
         -- Method 1: Try public servers API
-        local serversUrl = string.format(
-            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
-            game.PlaceId
-        )
-        
-        local response = game:HttpGetAsync(serversUrl)
-        local servers = HttpService:JSONDecode(response)
-        
-        if servers and servers.data then
-            local currentJobId = game.JobId
-            local validServers = {}
+        local success = pcall(function()
+            local serversUrl = string.format(
+                "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+                game.PlaceId
+            )
             
-            -- Collect valid servers
-            for _, server in ipairs(servers.data) do
-                if server.id ~= currentJobId and server.playing < server.maxPlayers - 1 then
-                    table.insert(validServers, server)
+            local response = game:HttpGetAsync(serversUrl)
+            local servers = HttpService:JSONDecode(response)
+            
+            if servers and servers.data then
+                local currentJobId = game.JobId
+                local validServers = {}
+                
+                for _, server in ipairs(servers.data) do
+                    if server.id ~= currentJobId and server.playing < server.maxPlayers - 1 then
+                        table.insert(validServers, server)
+                    end
+                end
+                
+                if #validServers > 0 then
+                    local randomServer = validServers[math.random(1, #validServers)]
+                    print("[WeaponFinder] Found server with " .. randomServer.playing .. "/" .. randomServer.maxPlayers .. " players")
+                    print("[WeaponFinder] Teleporting...")
+                    
+                    TeleportService:TeleportToPlaceInstance(
+                        game.PlaceId,
+                        randomServer.id,
+                        Players.LocalPlayer
+                    )
+                    
+                    wait(5) -- Wait to see if teleport succeeds
+                    return true
                 end
             end
+        end)
+        
+        if success then
+            return true
+        end
+        
+        warn(("[WeaponFinder] Server hop method 1 failed on attempt %d"):format(retryCount))
+        
+        -- Method 2: Simple teleport
+        if retryCount >= 3 then
+            print("[WeaponFinder] Trying simple teleport method...")
+            local teleportSuccess = pcall(function()
+                TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
+            end)
             
-            if #validServers > 0 then
-                -- Pick a random server
-                local randomServer = validServers[math.random(1, #validServers)]
-                print("[WeaponFinder] Found server with " .. randomServer.playing .. "/" .. randomServer.maxPlayers .. " players")
-                print("[WeaponFinder] Teleporting...")
-                
-                TeleportService:TeleportToPlaceInstance(
-                    game.PlaceId,
-                    randomServer.id,
-                    Players.LocalPlayer
-                )
+            if teleportSuccess then
+                wait(5)
                 return true
             end
         end
-    end)
-    
-    if not success then
-        warn("[WeaponFinder] Server hop method 1 failed:", errorMsg)
         
-        -- Method 2: Simple rejoin
-        print("[WeaponFinder] Attempting simple rejoin...")
-        local rejoinSuccess = pcall(function()
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, Players.LocalPlayer)
-            wait(1)
-            -- Force rejoin by teleporting to place
-            TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
-        end)
-        
-        if not rejoinSuccess then
-            warn("[WeaponFinder] All server hop methods failed. Retrying in 10 seconds...")
-            wait(10)
-            -- Final fallback
-            game:GetService("TeleportService"):Teleport(game.PlaceId)
+        -- Wait before retry
+        if retryCount < maxRetries then
+            local waitTime = 3 * retryCount
+            print(("[WeaponFinder] Waiting %d seconds before retry..."):format(waitTime))
+            wait(waitTime)
         end
     end
+    
+    warn("[WeaponFinder] All server hop attempts failed after " .. maxRetries .. " tries")
+    print("[WeaponFinder] Restarting scan in current server...")
+    wait(10)
 end
 
--- Scan player inventory
+-- Scan player inventory for exact weapon ID
 local function scanPlayer(plr)
     local getInventoryRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Extras"):WaitForChild("GetFullInventory")
     
@@ -323,35 +383,45 @@ local function scanPlayer(plr)
         return false
     end
     
-    -- Look for Weapons data
     local weaponsData = inventoryData.Weapons or inventoryData.weapons
     if not weaponsData then return false end
     
-    -- Recursive scan function
-    local function scanWeapons(data)
+    -- Recursive scan function for exact ID match
+    local function scanWeapons(data, depth)
         if type(data) ~= "table" then return false end
+        depth = depth or 0
         
         for key, value in pairs(data) do
+            -- Check if this key is the exact weapon ID
+            local keyStr = tostring(key)
+            debugPrint(string.rep("  ", depth) .. "Checking key:", keyStr)
+            
+            if keyStr == config.TargetWeaponID then
+                debugPrint("✓ Found exact match (key):", keyStr)
+                return true, keyStr
+            end
+            
+            -- Check value fields
             if type(value) == "table" then
-                -- Check if this is a weapon entry
-                local weaponName = value.Name or value.ItemName or key
-                local weaponInfo = parseWeaponName(tostring(weaponName))
-                
-                if weaponInfo then
-                    debugPrint("Checking weapon:", weaponInfo.clean, "(" .. weaponInfo.type .. ")", "against target:", config.TargetWeapon)
+                local weaponName = value.Name or value.ItemName or value.name or value.itemname
+                if weaponName then
+                    local weaponNameStr = tostring(weaponName)
+                    debugPrint(string.rep("  ", depth) .. "Checking value:", weaponNameStr)
                     
-                    if weaponMatches(weaponInfo.original, config.TargetWeapon) then
-                        return true, weaponInfo
+                    if weaponNameStr == config.TargetWeaponID then
+                        debugPrint("✓ Found exact match (value):", weaponNameStr)
+                        return true, weaponNameStr
                     end
                 end
                 
-                -- Recurse into nested tables
-                local found, info = scanWeapons(value)
-                if found then return true, info end
-            elseif type(key) == "string" then
-                local weaponInfo = parseWeaponName(key)
-                if weaponInfo and weaponMatches(weaponInfo.original, config.TargetWeapon) then
-                    return true, weaponInfo
+                -- Recurse
+                local found, id = scanWeapons(value, depth + 1)
+                if found then return true, id end
+            elseif type(value) == "string" then
+                debugPrint(string.rep("  ", depth) .. "Checking string value:", value)
+                if value == config.TargetWeaponID then
+                    debugPrint("✓ Found exact match (string):", value)
+                    return true, value
                 end
             end
         end
@@ -364,8 +434,10 @@ end
 
 -- Main scan loop
 local function startScan()
-    print("[WeaponFinder] Starting search for:", config.TargetWeapon)
+    print("[WeaponFinder] ==============================================")
+    print("[WeaponFinder] Starting search for weapon ID:", config.TargetWeaponID)
     print("[WeaponFinder] Auto server hop:", config.AutoServerHop)
+    print("[WeaponFinder] ==============================================")
     
     while isSearching do
         local players = Players:GetPlayers()
@@ -374,26 +446,32 @@ local function startScan()
         for _, plr in ipairs(players) do
             if not isSearching then break end
             
-            local found, weaponInfo = scanPlayer(plr)
+            debugPrint("Scanning player:", plr.Name)
+            local found, weaponID = scanPlayer(plr)
             
             if found then
                 isSearching = false
                 foundPlayer = plr.Name
+                local weaponInfo = getWeaponInfo(weaponID)
                 foundWeapon = weaponInfo
                 
-                local detailsText = string.format(
-                    "%s | Type: %s%s",
-                    weaponInfo.clean,
-                    weaponInfo.type,
-                    weaponInfo.year and (" | Year: " .. weaponInfo.year) or ""
-                )
+                print("[WeaponFinder] ==============================================")
+                print("[WeaponFinder] ✓✓✓ WEAPON FOUND! ✓✓✓")
+                print("[WeaponFinder] Player:", foundPlayer)
+                print("[WeaponFinder] Weapon ID:", weaponInfo.id)
+                print("[WeaponFinder] Weapon Name:", weaponInfo.name)
+                print("[WeaponFinder] Type:", weaponInfo.type)
+                print("[WeaponFinder] Rarity:", weaponInfo.rarity)
+                print("[WeaponFinder] Year:", weaponInfo.year)
+                print("[WeaponFinder] Event:", weaponInfo.event)
+                print("[WeaponFinder] Asset ID:", weaponInfo.assetID)
+                print("[WeaponFinder] ==============================================")
                 
-                print(("[WeaponFinder] ✓ FOUND! Player: %s | %s"):format(foundPlayer, detailsText))
                 createNotification(foundPlayer, weaponInfo)
                 return
             end
             
-            wait(0.1) -- Small delay between players
+            wait(0.15)
         end
         
         if isSearching then
@@ -403,7 +481,8 @@ local function startScan()
                 print("[WeaponFinder] Server hopping in 3 seconds...")
                 wait(3)
                 serverHop()
-                return -- Stop after initiating hop
+                -- If serverHop fails completely, it will wait and we continue scanning
+                isSearching = true
             else
                 print("[WeaponFinder] Waiting " .. config.ScanInterval .. " seconds before next scan...")
                 wait(config.ScanInterval)
@@ -412,5 +491,13 @@ local function startScan()
     end
 end
 
--- Start the scan
+-- Initialize and start
+print("[WeaponFinder] Initializing...")
+local dbLoaded = loadWeaponDatabase()
+
+if not dbLoaded then
+    warn("[WeaponFinder] Database failed to load, but continuing with basic functionality...")
+end
+
+wait(1)
 startScan()
